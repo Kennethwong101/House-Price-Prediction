@@ -289,4 +289,240 @@ print(X.shape)
 print(testing_features.shape)
 
 #Prediction Model for Data mining 
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import KFold, cross_val_score
+from sklearn.model_selection import cross_val_predict
+from sklearn.preprocessing import RobustScaler
+from sklearn.pipeline import make_pipeline
+
+#Build our model method
+lm = LinearRegression()
+
+#Build our cross validation method
+kfolds = KFold(n_splits=10, shuffle=True, random_state=23)
+
+#build our model scoring function
+def cv_rmse(model):
+    rmse = np.sqrt(-cross_val_score(model, X, y, 
+                                   scoring="neg_mean_squared_error", 
+                                   cv = kfolds))
+    return(rmse)
+
+
+#second scoring metric
+def cv_rmsle(model):
+    rmsle = np.sqrt(np.log(-cross_val_score(model, X, y,
+                                           scoring = 'neg_mean_squared_error',
+                                           cv=kfolds)))
+    return(rmsle)
+benchmark_model = make_pipeline(RobustScaler(),
+                                lm).fit(X=X, y=y)
+cv_rmse(benchmark_model).mean()
+coeffs = pd.DataFrame(list(zip(X.columns, benchmark_model.steps[1][1].coef_)), columns=['Predictors', 'Coefficients'])
+
+coeffs.sort_values(by='Coefficients', ascending=False)
+from sklearn.linear_model import RidgeCV
+
+def ridge_selector(k):
+    ridge_model = make_pipeline(RobustScaler(),
+                                RidgeCV(alphas = [k],
+                                        cv=kfolds)).fit(X, y)
+    
+    ridge_rmse = cv_rmse(ridge_model).mean()
+    return(ridge_rmse)
+r_alphas = [.0001, .0003, .0005, .0007, .0009, 
+          .01, 0.05, 0.1, 0.3, 1, 3, 5, 10, 15, 20, 30, 50, 60, 70, 80]
+
+ridge_scores = []
+for alpha in r_alphas:
+    score = ridge_selector(alpha)
+    ridge_scores.append(score)
+plt.plot(r_alphas, ridge_scores, label='Ridge')
+plt.legend('center')
+plt.xlabel('alpha')
+plt.ylabel('score')
+
+ridge_score_table = pd.DataFrame(ridge_scores, r_alphas, columns=['RMSE'])
+ridge_score_table
+
+alphas_alt = [14.5, 14.6, 14.7, 14.8, 14.9, 15, 15.1, 15.2, 15.3, 15.4, 15.5]
+
+ridge_model2 = make_pipeline(RobustScaler(),
+                            RidgeCV(alphas = alphas_alt,
+                                    cv=kfolds)).fit(X, y)
+
+cv_rmse(ridge_model2).mean()
+ridge_model2.steps[1][1].alpha_
+from sklearn.linear_model import LassoCV
+
+
+alphas = [0.00005, 0.0001, 0.0003, 0.0005, 0.0007, 
+          0.0009, 0.01]
+alphas2 = [0.00005, 0.0001, 0.0002, 0.0003, 0.0004, 0.0005,
+           0.0006, 0.0007, 0.0008]
+
+
+lasso_model2 = make_pipeline(RobustScaler(),
+                             LassoCV(max_iter=1e7,
+                                    alphas = alphas2,
+                                    random_state = 42)).fit(X, y)
+scores = lasso_model2.steps[1][1].mse_path_
+
+plt.plot(alphas2, scores, label='Lasso')
+plt.legend(loc='center')
+plt.xlabel('alpha')
+plt.ylabel('RMSE')
+plt.tight_layout()
+plt.show()
+lasso_model2.steps[1][1].alpha_
+cv_rmse(lasso_model2).mean()
+coeffs = pd.DataFrame(list(zip(X.columns, lasso_model2.steps[1][1].coef_)), columns=['Predictors', 'Coefficients'])
+used_coeffs = coeffs[coeffs['Coefficients'] != 0].sort_values(by='Coefficients', ascending=False)
+print(used_coeffs.shape)
+print(used_coeffs)
+used_coeffs_values = X[used_coeffs['Predictors']]
+used_coeffs_values.shape
+from sklearn.linear_model import ElasticNetCV
+
+e_alphas = [0.0001, 0.0002, 0.0003, 0.0004, 0.0005, 0.0006, 0.0007]
+e_l1ratio = [0.8, 0.85, 0.9, 0.95, 0.99, 1]
+
+elastic_cv = make_pipeline(RobustScaler(), 
+                           ElasticNetCV(max_iter=1e7, alphas=e_alphas, 
+                                        cv=kfolds, l1_ratio=e_l1ratio))
+
+elastic_model3 = elastic_cv.fit(X, y)
+cv_rmse(elastic_model3).mean()
+print(elastic_model3.steps[1][1].l1_ratio_)
+print(elastic_model3.steps[1][1].alpha_)
+from sklearn.model_selection import GridSearchCV
+from matplotlib.pylab import rcParams
+rcParams['figure.figsize'] = 12, 4
+%matplotlib inline
+import xgboost as xgb
+from xgboost import XGBRegressor
+from sklearn.metrics import mean_squared_error
+
+def modelfit(alg, dtrain, target, useTrainCV=True, 
+             cv_folds=5, early_stopping_rounds=50):
+    
+    if useTrainCV:
+        xgb_param = alg.get_xgb_params()
+        xgtrain = xgb.DMatrix(dtrain.values, 
+                              label=y.values)
+        
+        print("\nGetting Cross-validation result..")
+        cvresult = xgb.cv(xgb_param, xgtrain, 
+                          num_boost_round=alg.get_params()['n_estimators'], 
+                          nfold=cv_folds,metrics='rmse', 
+                          early_stopping_rounds=early_stopping_rounds,
+                          verbose_eval = True)
+        alg.set_params(n_estimators=cvresult.shape[0])
+    
+    #Fit the algorithm on the data
+    print("\nFitting algorithm to data...")
+    alg.fit(dtrain, target, eval_metric='rmse')
+        
+    #Predict training set:
+    print("\nPredicting from training data...")
+    dtrain_predictions = alg.predict(dtrain)
+        
+    #Print model report:
+    print("\nModel Report")
+    print("RMSE : %.4g" % np.sqrt(mean_squared_error(target.values,
+                                             dtrain_predictions)))
+xgb3 = XGBRegressor(learning_rate =0.01, n_estimators=3460, max_depth=3,
+                     min_child_weight=0 ,gamma=0, subsample=0.75,
+                     colsample_bytree=0.75,objective= 'reg:linear',
+                     nthread=4,scale_pos_weight=1,seed=27, reg_alpha=0.00006)
+
+xgb_fit = xgb3.fit(X, y)
+
+cv_rmse(xgb3).mean()
+
+from sklearn import svm
+svr_opt = svm.SVR(C = 100000, gamma = 1e-08)
+
+svr_fit = svr_opt.fit(X, y)
+
+from lightgbm import LGBMRegressor
+
+lgbm_model = LGBMRegressor(objective='regression',num_leaves=5,
+                              learning_rate=0.05, n_estimators=720,
+                              max_bin = 55, bagging_fraction = 0.75,
+                              bagging_freq = 5, feature_fraction = 0.25,
+                              feature_fraction_seed=9, bagging_seed=9,
+                              min_data_in_leaf =6, min_sum_hessian_in_leaf = 11)
+cv_rmse(lgbm_model).mean()
+lgbm_fit = lgbm_model.fit(X, y)
+
+from mlxtend.regressor import StackingCVRegressor
+from sklearn.pipeline import make_pipeline
+
+#setup models
+ridge = make_pipeline(RobustScaler(), 
+                      RidgeCV(alphas = alphas_alt, cv=kfolds))
+
+lasso = make_pipeline(RobustScaler(),
+                      LassoCV(max_iter=1e7, alphas = alphas2,
+                              random_state = 42, cv=kfolds))
+
+elasticnet = make_pipeline(RobustScaler(), 
+                           ElasticNetCV(max_iter=1e7, alphas=e_alphas, 
+                                        cv=kfolds, l1_ratio=e_l1ratio))
+
+lightgbm = make_pipeline(RobustScaler(),
+                        LGBMRegressor(objective='regression',num_leaves=5,
+                                      learning_rate=0.05, n_estimators=720,
+                                      max_bin = 55, bagging_fraction = 0.75,
+                                      bagging_freq = 5, feature_fraction = 0.25,
+                                      feature_fraction_seed=9, bagging_seed=9,
+                                      min_data_in_leaf =6, 
+                                      min_sum_hessian_in_leaf = 11))
+
+xgboost = make_pipeline(RobustScaler(),
+                        XGBRegressor(learning_rate =0.01, n_estimators=3460, 
+                                     max_depth=3,min_child_weight=0 ,
+                                     gamma=0, subsample=0.75,
+                                     colsample_bytree=0.75,
+                                     objective= 'reg:linear',nthread=4,
+                                     scale_pos_weight=1,seed=27, 
+                                     reg_alpha=0.00006))
+
+
+#stack
+stack_gen = StackingCVRegressor(regressors=(ridge, lasso, elasticnet, 
+                                            xgboost, lightgbm), 
+                               meta_regressor=xgboost,
+                               use_features_in_secondary=True)
+
+#prepare dataframes
+stackX = np.array(X)
+stacky = np.array(y)
+
+print("cross validated scores")
+
+for model, label in zip([ridge, lasso, elasticnet, xgboost, lightgbm, stack_gen],
+                      ['RidgeCV', 'LassoCV', 'ElasticNetCV', 'xgboost', 'lightgbm',
+                       'StackingCVRegressor']):
+    
+     SG_scores = cross_val_score(model, stackX, stacky, cv=kfolds,
+                                scoring='neg_mean_squared_error')
+     print("RMSE", np.sqrt(-SG_scores.mean()), "SD", scores.std(), label)
+
+stack_gen_model = stack_gen.fit(stackX, stacky)
+em_preds = elastic_model3.predict(testing_features)
+lasso_preds = lasso_model2.predict(testing_features)
+ridge_preds = ridge_model2.predict(testing_features)
+stack_gen_preds = stack_gen_model.predict(testing_features)
+xgb_preds = xgb_fit.predict(testing_features)
+svr_preds = svr_fit.predict(testing_features)
+lgbm_preds = lgbm_fit.predict(testing_features)
+stack_preds = ((0.2*em_preds) + (0.1*lasso_preds) + (0.1*ridge_preds) + 
+               (0.2*xgb_preds) + (0.1*lgbm_preds) + (0.3*stack_gen_preds))
+stack_preds
+submission = pd.read_csv("sample_submission.csv")
+submission.iloc[:,1] = np.expm1(stack_preds)
+submission.to_csv("final_submission.csv", index=False)
+
 
